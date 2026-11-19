@@ -1,0 +1,531 @@
+{% extends "sensors/base.html" %}
+
+{% block title %}Dashboard IoT - Surveillance & Alertes{% endblock %}
+
+{% block extra_head %}
+<style>
+    /* Couleur d'arrière-plan personnalisée pour la page Dashboard */
+    body {
+        background: linear-gradient(135deg, #e4ebf5 0%, #edf2f7 50%, #e2eaf5 100%) !important;
+        min-height: 100vh;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- 1. BANNIÈRE DE TRAÇABILITÉ & STATUT GLOBAL -->
+<div class="row g-3 mb-4">
+    <!-- Statut Fraîcheur / Traçabilité (Max 20 mins) -->
+    <div class="col-lg-8">
+        <div class="card card-custom p-3 {% if is_delayed %}border border-danger bg-danger-subtle{% else %}bg-white{% endif %}">
+            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <div class="d-flex align-items-center gap-3">
+                    <div class="p-3 rounded-circle {% if is_delayed %}bg-danger text-white badge-pulse{% else %}bg-success-subtle text-success{% endif %} fs-3">
+                        <i class="fa-solid fa-clock-rotate-left"></i>
+                    </div>
+                    <div>
+                        <div class="text-muted small text-uppercase fw-bold">Traçabilité & Fréquence de Transmission (Max 20 mins)</div>
+                        <h5 class="mb-0 fw-bold {% if is_delayed %}text-danger{% else %}text-dark{% endif %}">
+                            {% if is_delayed %}
+                                ⚠️ RETARD DÉTECTÉ : Dernière donnée reçue il y a {{ minutes_since_last }} minutes
+                            {% elif latest_reading %}
+                                ✅ Donnée fraîche reçue à {{ latest_reading.dt|date:"H:i:s" }} ({{ freshness_status }})
+                            {% else %}
+                                Aucune donnée enregistrée
+                            {% endif %}
+                        </h5>
+                        <small class="text-secondary">Règle qualité : La donnée doit changer au maximum toutes les 20 minutes.</small>
+                    </div>
+                </div>
+                <div class="text-end">
+                    {% if is_delayed %}
+                        <span class="badge bg-danger fs-6 py-2 px-3">
+                            <i class="fa-solid fa-triangle-exclamation me-1"></i> Perte Signal Capteur (> 20 min)
+                        </span>
+                    {% else %}
+                        <span class="badge bg-success fs-6 py-2 px-3">
+                            <i class="fa-solid fa-shield-check me-1"></i> Flux Actif & Conforme
+                        </span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Statut Global / Incident -->
+    <div class="col-lg-4">
+        <div class="card card-custom p-3 {% if active_incident %}border border-danger bg-danger text-white{% else %}bg-success text-white{% endif %}">
+            <div class="d-flex align-items-center justify-content-between">
+                <div>
+                    <div class="small text-uppercase opacity-75 fw-bold">Statut Global Système</div>
+                    {% if active_incident %}
+                        <h4 class="mb-0 fw-bold">🚨 INCIDENT EN COURS</h4>
+                        <div class="mt-1 small">
+                            Compteur d'alertes : <strong>{{ active_incident.compteur_alertes }}</strong> | Temp Max : <strong>{{ active_incident.temp_max|floatformat:1 }}°C</strong>
+                        </div>
+                    {% else %}
+                        <h4 class="mb-0 fw-bold">🟢 SYSTÈME NORMAL</h4>
+                        <div class="mt-1 small">
+                            Compteur d'alertes : <strong>0</strong> | Température conforme [2°C - 8°C]
+                        </div>
+                    {% endif %}
+                </div>
+                <div class="fs-1 opacity-75">
+                    {% if active_incident %}
+                        <i class="fa-solid fa-triangle-exclamation badge-pulse"></i>
+                    {% else %}
+                        <i class="fa-solid fa-circle-check"></i>
+                    {% endif %}
+                </div>
+            </div>
+            {% if active_incident %}
+                <div class="mt-2 text-end">
+                    <a href="/incidents/" class="btn btn-light btn-sm fw-bold">
+                        <i class="fa-solid fa-comments me-1"></i> Ouvrir le Chatgroup ({{ active_incident.operateurs_invites|join:", " }})
+                    </a>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- 2. CARTES KPIS EN TEMPS RÉEL -->
+<div class="row g-3 mb-4">
+    <!-- Température Actuelle -->
+    <div class="col-md-4">
+        <div class="card card-custom p-4 bg-white">
+            <div class="d-flex justify-content-between align-items-start">
+                <div>
+                    <span class="text-muted fw-semibold text-uppercase small">Température Actuelle</span>
+                    <div class="d-flex align-items-baseline mt-2">
+                        <span class="kpi-value {% if latest_reading.temp >= temp_min and latest_reading.temp <= temp_max %}text-success{% else %}text-danger{% endif %}">
+                            {{ latest_reading.temp|default:"--"|floatformat:1 }}
+                        </span>
+                        <span class="kpi-unit ms-1">°C</span>
+                    </div>
+                </div>
+                <div class="p-3 rounded-circle {% if latest_reading.temp >= temp_min and latest_reading.temp <= temp_max %}bg-success-subtle text-success{% else %}bg-danger-subtle text-danger{% endif %} fs-3">
+                    <i class="fa-solid fa-temperature-half"></i>
+                </div>
+            </div>
+            <div class="mt-3 pt-2 border-top d-flex justify-content-between align-items-center">
+                <span class="small text-muted">Seuil requis : <strong>2.0°C - 8.0°C</strong></span>
+                {% if latest_reading.temp >= temp_min and latest_reading.temp <= temp_max %}
+                    <span class="badge bg-success-subtle text-success fw-bold">Conforme</span>
+                {% else %}
+                    <span class="badge bg-danger-subtle text-danger fw-bold">Hors Norme</span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Humidité Actuelle -->
+    <div class="col-md-4">
+        <div class="card card-custom p-4 bg-white">
+            <div class="d-flex justify-content-between align-items-start">
+                <div>
+                    <span class="text-muted fw-semibold text-uppercase small">Humidité Relative</span>
+                    <div class="d-flex align-items-baseline mt-2">
+                        <span class="kpi-value text-primary">
+                            {{ latest_reading.hum|default:"--"|floatformat:1 }}
+                        </span>
+                        <span class="kpi-unit ms-1">%</span>
+                    </div>
+                </div>
+                <div class="p-3 rounded-circle bg-primary-subtle text-primary fs-3">
+                    <i class="fa-solid fa-droplet"></i>
+                </div>
+            </div>
+            <div class="mt-3 pt-2 border-top d-flex justify-content-between align-items-center">
+                <span class="small text-muted">Capteur : <strong>DHT11 IoT</strong></span>
+                <span class="badge bg-primary-subtle text-primary fw-bold">Actif</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Synthèse & Alertes Journalières -->
+    <div class="col-md-4">
+        <div class="card card-custom p-4 bg-white">
+            <div class="d-flex justify-content-between align-items-start">
+                <div>
+                    <span class="text-muted fw-semibold text-uppercase small">Taux de Conformité du Jour</span>
+                    <div class="d-flex align-items-baseline mt-2">
+                        <span class="kpi-value {% if conformity_rate >= 95 %}text-success{% elif conformity_rate >= 80 %}text-warning{% else %}text-danger{% endif %}">
+                            {{ conformity_rate }}
+                        </span>
+                        <span class="kpi-unit ms-1">%</span>
+                    </div>
+                </div>
+                <div class="p-3 rounded-circle bg-info-subtle text-info fs-3">
+                    <i class="fa-solid fa-chart-pie"></i>
+                </div>
+            </div>
+            <div class="mt-3 pt-2 border-top d-flex justify-content-between align-items-center">
+                <span class="small text-muted">Total relevés aujourd'hui : <strong>{{ stats.total_count|default:0 }}</strong></span>
+                <span class="small text-muted">Min: <strong>{{ stats.min_temp|floatformat:1|default:"-" }}°</strong> | Max: <strong>{{ stats.max_temp|floatformat:1|default:"-" }}°</strong></span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 3. SOLUTION SUPÉRIEURE AUX GRAPHS : MATRICE HORAIRE ANALYTIQUE (HEATMAP 24H) -->
+<div class="row g-3 mb-4">
+    <div class="col-12">
+        <div class="card card-custom p-4 bg-white">
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+                <div>
+                    <h5 class="fw-bold mb-1"><i class="fa-solid fa-table-cells text-primary me-2"></i>Matrice Analytique Horaire (Vue Heatmap 24h)</h5>
+                    <p class="text-muted small mb-0">Solution alternative et supérieure aux graphes : visualisation instantanée par créneau d'1 heure avec détection immédiate des dépassements de seuils (2°C - 8°C).</p>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="badge bg-success-subtle text-success border border-success"><i class="fa-solid fa-square me-1"></i> Conforme (2-8°C)</span>
+                    <span class="badge bg-danger-subtle text-danger border border-danger"><i class="fa-solid fa-square me-1"></i> Alerte / Anomalie</span>
+                    <span class="badge bg-light text-secondary border"><i class="fa-solid fa-square me-1"></i> Pas de mesure</span>
+                </div>
+            </div>
+
+            <!-- Grille 24 colonnes -->
+            <div class="row row-cols-4 row-cols-md-8 row-cols-lg-12 g-2">
+                {% for slot in hourly_matrix %}
+                    <div class="col">
+                        <div class="matrix-cell {{ slot.status }}" title="Créneau {{ slot.hour }}: {{ slot.count }} mesure(s) {% if slot.avg_temp %}- Moy: {{ slot.avg_temp }}°C / {{ slot.avg_hum }}%{% endif %}">
+                            <div class="fw-bold">{{ slot.hour }}</div>
+                            <div class="mt-1">
+                                {% if slot.avg_temp is not None %}
+                                    <span class="fs-6">{{ slot.avg_temp }}°C</span>
+                                    <div class="small opacity-75">{{ slot.avg_hum }}%</div>
+                                {% else %}
+                                    <span class="text-muted">--</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 4. HISTORIQUE JOURNALIER & EXPORT CSV & MODULE DE TEST -->
+<div class="row g-3 mb-4">
+    <!-- Historique avec Sélecteur de date & Export CSV -->
+    <div class="col-lg-8">
+        <div class="card card-custom p-4 bg-white h-100">
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+                <h5 class="fw-bold mb-0">
+                    <i class="fa-solid fa-calendar-day text-primary me-2"></i>Historique Journalier des Relevés
+                </h5>
+                <!-- Formulaire Sélecteur de date & Téléchargement CSV -->
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <form method="GET" action="/dashboard/" class="d-flex align-items-center gap-2">
+                        <input type="date" name="date" value="{{ selected_date }}" class="form-control form-control-sm" onchange="this.form.submit()">
+                    </form>
+                    <a href="/export/csv/?date={{ selected_date }}" class="btn btn-outline-success btn-sm fw-bold">
+                        <i class="fa-solid fa-file-csv me-1"></i> Télécharger CSV du jour
+                    </a>
+                    <a href="/export/csv/" class="btn btn-secondary btn-sm" title="Télécharger tout l'historique">
+                        <i class="fa-solid fa-download me-1"></i> Tout CSV
+                    </a>
+                </div>
+            </div>
+
+            <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                <table class="table table-hover table-striped align-middle small mb-0">
+                    <thead class="table-light sticky-top">
+                        <tr>
+                            <th>#ID</th>
+                            <th>Date & Heure</th>
+                            <th>Température</th>
+                            <th>Humidité</th>
+                            <th>Statut (2°C - 8°C)</th>
+                            <th>Écart</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for r in day_readings %}
+                            <tr>
+                                <td><span class="badge bg-light text-dark border">#{{ r.id }}</span></td>
+                                <td>{{ r.dt|date:"d/m/Y H:i:s" }}</td>
+                                <td>
+                                    <strong class="{% if r.temp >= temp_min and r.temp <= temp_max %}text-success{% else %}text-danger{% endif %}">
+                                        {{ r.temp|floatformat:1 }} °C
+                                    </strong>
+                                </td>
+                                <td><span class="text-primary">{{ r.hum|floatformat:1 }} %</span></td>
+                                <td>
+                                    {% if r.temp >= temp_min and r.temp <= temp_max %}
+                                        <span class="badge bg-success-subtle text-success border border-success">
+                                            <i class="fa-solid fa-check me-1"></i> Conforme
+                                        </span>
+                                    {% elif r.temp > temp_max %}
+                                        <span class="badge bg-danger-subtle text-danger border border-danger">
+                                            <i class="fa-solid fa-fire me-1"></i> Trop Chaud
+                                        </span>
+                                    {% else %}
+                                        <span class="badge bg-info-subtle text-info border border-info">
+                                            <i class="fa-solid fa-snowflake me-1"></i> Trop Froid
+                                        </span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if r.temp > temp_max %}
+                                        <span class="text-danger small">+{{ r.temp|add:"-8"|floatformat:1 }}°C</span>
+                                    {% elif r.temp < temp_min %}
+                                        <span class="text-info small">{{ r.temp|add:"-2"|floatformat:1 }}°C</span>
+                                    {% else %}
+                                        <span class="text-muted small">0.0°C</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% empty %}
+                            <tr>
+                                <td colspan="6" class="text-center text-muted py-4">
+                                    <i class="fa-solid fa-folder-open fs-3 d-block mb-2"></i>
+                                    Aucune donnée pour la date du {{ selected_date }}.
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="mt-2 text-muted small">
+                Affichage de {{ day_readings|length }} / {{ day_readings_count }} mesures du {{ selected_date }}.
+            </div>
+        </div>
+    </div>
+
+    <!-- 5. PARTIE POUR LES TESTS -->
+    <div class="col-lg-4">
+        <div class="card card-custom p-4 bg-white h-100 border border-primary-subtle">
+            <h5 class="fw-bold mb-2 text-primary">
+                <i class="fa-solid fa-vial-circle-check me-2"></i>Partie pour les tests
+            </h5>
+            <p class="text-muted small mb-3">
+                Simulez l'envoi de mesures du capteur pour tester les alertes en temps réel, l'incrémentation du compteur et l'escalade vers les opérateurs 1, 2 et 3.
+            </p>
+
+            <!-- Formulaire d'injection manuelle -->
+            <form method="POST" action="/simulate/" class="mb-3">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="single">
+                <div class="row g-2 mb-2">
+                    <div class="col-6">
+                        <label class="form-label small fw-bold">Température (°C)</label>
+                        <input type="number" step="0.1" name="temp" value="24.1" class="form-control form-control-sm" required>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label small fw-bold">Humidité (%)</label>
+                        <input type="number" step="0.1" name="hum" value="44.0" class="form-control form-control-sm" required>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary btn-sm w-100 fw-bold">
+                    <i class="fa-solid fa-paper-plane me-1"></i> Envoyer Mesure de Test
+                </button>
+            </form>
+
+            <hr>
+
+            <!-- Simulations rapides 1-clic -->
+            <div class="small fw-bold text-secondary mb-2 text-uppercase">Scénarios de test rapides :</div>
+            <div class="d-grid gap-2">
+                <form method="POST" action="/simulate/">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="batch_alerts_4">
+                    <button type="submit" class="btn btn-outline-warning btn-sm w-100 text-start">
+                        <i class="fa-solid fa-user-plus me-1"></i> <strong>Test Seuil 4 :</strong> Simuler 4 alertes (Inviter Opérateur 2)
+                    </button>
+                </form>
+
+                <form method="POST" action="/simulate/">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="batch_alerts_7">
+                    <button type="submit" class="btn btn-outline-danger btn-sm w-100 text-start">
+                        <i class="fa-solid fa-users me-1"></i> <strong>Test Seuil 7 :</strong> Simuler 7 alertes (Inviter Opérateur 3)
+                    </button>
+                </form>
+
+                <form method="POST" action="/simulate/">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="resolve">
+                    <button type="submit" class="btn btn-outline-success btn-sm w-100 text-start">
+                        <i class="fa-solid fa-check-double me-1"></i> <strong>Test Rétablissement :</strong> Température 5.0°C (Résoudre Incident)
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 6. DEUX GRAPHIQUES DISTINCTS : TEMPÉRATURE ET HUMIDITÉ (EN BAS DU DASHBOARD) -->
+<div class="row g-3 mb-4">
+    <!-- Graphique 1 : Température -->
+    <div class="col-lg-6">
+        <div class="card card-custom p-4 bg-white h-100">
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+                <div>
+                    <h5 class="fw-bold mb-1 text-danger">
+                        <i class="fa-solid fa-temperature-three-quarters me-2"></i>Graphique de Température
+                    </h5>
+                    <p class="text-muted small mb-0">
+                        Évolution temporelle (°C) - Relevés du <strong>{{ selected_date }}</strong>
+                    </p>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="badge bg-danger-subtle text-danger border border-danger">
+                        <i class="fa-solid fa-fire me-1"></i> Seuil : 2.0°C - 8.0°C
+                    </span>
+                </div>
+            </div>
+
+            <!-- Conteneur Canvas Température -->
+            <div style="position: relative; height: 320px; width: 100%;">
+                <canvas id="temperatureChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Graphique 2 : Humidité -->
+    <div class="col-lg-6">
+        <div class="card card-custom p-4 bg-white h-100">
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+                <div>
+                    <h5 class="fw-bold mb-1 text-primary">
+                        <i class="fa-solid fa-droplet me-2"></i>Graphique d'Humidité
+                    </h5>
+                    <p class="text-muted small mb-0">
+                        Évolution temporelle (%) - Relevés du <strong>{{ selected_date }}</strong>
+                    </p>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="badge bg-primary-subtle text-primary border border-primary">
+                        <i class="fa-solid fa-water me-1"></i> Échelle : 0% - 100%
+                    </span>
+                </div>
+            </div>
+
+            <!-- Conteneur Canvas Humidité -->
+            <div style="position: relative; height: 320px; width: 100%;">
+                <canvas id="humidityChart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<!-- Chart.js CDN -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script>
+    const labels = {{ chart_labels_json|safe }};
+    const temps = {{ chart_temps_json|safe }};
+    const hums = {{ chart_hums_json|safe }};
+
+    // 1. Initialisation du Graphique de Température
+    const ctxTemp = document.getElementById('temperatureChart').getContext('2d');
+    new Chart(ctxTemp, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Température (°C)',
+                data: temps,
+                borderColor: '#dc3545',
+                backgroundColor: 'rgba(220, 53, 69, 0.12)',
+                tension: 0.35,
+                borderWidth: 2.5,
+                pointRadius: labels.length > 50 ? 1.5 : 3.5,
+                pointHoverRadius: 6,
+                pointBackgroundColor: '#dc3545',
+                fill: true
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    position: 'top',
+                    labels: { font: { weight: 'bold' } }
+                },
+                tooltip: {
+                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                    callbacks: {
+                        label: function(context) {
+                            return ` Température: ${context.parsed.y} °C`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    grid: { display: false },
+                    title: { display: true, text: 'Heure de mesure', font: { size: 11, weight: '600' } },
+                    ticks: { maxTicksLimit: 10 }
+                },
+                y: {
+                    title: { display: true, text: 'Température (°C)', color: '#dc3545', font: { weight: 'bold' } },
+                    grid: { color: 'rgba(220, 53, 69, 0.08)' }
+                }
+            }
+        }
+    });
+
+    // 2. Initialisation du Graphique d'Humidité
+    const ctxHum = document.getElementById('humidityChart').getContext('2d');
+    new Chart(ctxHum, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Humidité (%)',
+                data: hums,
+                borderColor: '#0d6efd',
+                backgroundColor: 'rgba(13, 110, 253, 0.12)',
+                tension: 0.35,
+                borderWidth: 2.5,
+                pointRadius: labels.length > 50 ? 1.5 : 3.5,
+                pointHoverRadius: 6,
+                pointBackgroundColor: '#0d6efd',
+                fill: true
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    position: 'top',
+                    labels: { font: { weight: 'bold' } }
+                },
+                tooltip: {
+                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                    callbacks: {
+                        label: function(context) {
+                            return ` Humidité: ${context.parsed.y} %`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    grid: { display: false },
+                    title: { display: true, text: 'Heure de mesure', font: { size: 11, weight: '600' } },
+                    ticks: { maxTicksLimit: 10 }
+                },
+                y: {
+                    min: 0,
+                    max: 100,
+                    title: { display: true, text: 'Humidité (%)', color: '#0d6efd', font: { weight: 'bold' } },
+                    grid: { color: 'rgba(13, 110, 253, 0.08)' }
+                }
+            }
+        }
+    });
+
+    // 3. Rafraîchissement automatique de la page toutes les 20 secondes
+    setTimeout(function() {
+        window.location.reload();
+    }, 20000);
+</script>
+{% endblock %}
